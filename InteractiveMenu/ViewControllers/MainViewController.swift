@@ -9,7 +9,8 @@
 import UIKit
 
 class MainViewController: UIViewController {
-
+    fileprivate var viewTouch:TouchView?
+    
     fileprivate let btnOptions:UIButton = {
         let btn = UIButton(frame: CGRect.zero)
         btn.translatesAutoresizingMaskIntoConstraints = false
@@ -21,24 +22,32 @@ class MainViewController: UIViewController {
     }()
     
     fileprivate var interactiveMenu:InteractiveMenu!
-    fileprivate var vcConfiguration:ConfigurationVC = ConfigurationVC()
+    fileprivate var vcBottom = BottomVC()
    
 
 }
 
 //MARK: LifeCycle
-extension MainViewController : InteractiveMenuDataSource {
+extension MainViewController : InteractiveMenuDataSource , InteractiveMenuDelegate {
     override func viewDidLoad() {
            super.viewDidLoad()
         self.setUpUI()
         let config = InteractiveMenuConfiguration()
-        config.containerViewHeight = 700 
-        self.interactiveMenu = InteractiveMenu(embedIn: self.view, dataSource: self , configuration: config)
-    
+        config.containerViewHeight = self.view.frame.size.height - 100
+        config.containerViewBackgroundColor = #colorLiteral(red: 0.3647058904, green: 0.06666667014, blue: 0.9686274529, alpha: 1)
+        self.interactiveMenu = InteractiveMenu(embedIn: self.view, dataSource: self , delegate: self,  configuration: config)
+        
+        let tapGesture = InstantPanGesture(target: self, action: #selector(viewDidTapped(recognizer:)))
+           tapGesture.delegate = self
+           //self.view.addGestureRecognizer(tapGesture)
        }
     
     func interactiveMenuViewInContainerView(interactiveMenu: InteractiveMenu) -> UIView {
-        return self.vcConfiguration.view 
+        return self.vcBottom.view
+    }
+    
+    func interactiveMenuViewScrollableContentView(interactiveMenu: InteractiveMenu) -> UIScrollView? {
+        return self.vcBottom.tableViewContent
     }
 }
 
@@ -54,8 +63,37 @@ extension MainViewController {
 }
 
 // MARK: Actions
-extension MainViewController {
+extension MainViewController : UIGestureRecognizerDelegate {
     @objc fileprivate func customizeOnTap() {
         self.interactiveMenu.show()
     }
+    
+    @objc private func viewDidTapped(recognizer:UITapGestureRecognizer) {
+         
+           let touchPoint = recognizer.location(in: self.view)
+           switch recognizer.state {
+           case .began :
+               let keyWindow = UIApplication.shared.windows.filter {$0.isKeyWindow}.first
+               self.viewTouch = TouchView()
+               keyWindow!.addSubview(self.viewTouch!)
+               self.viewTouch?.beganTouch(point: touchPoint)
+               if self.btnOptions.frame.contains(touchPoint) {
+                self.customizeOnTap()
+               }
+           case .changed:
+             
+               self.viewTouch!.center = touchPoint
+           case .ended:
+               
+               self.viewTouch!.endTouch {
+                   
+               }
+           default:
+               break
+           }
+       }
+       
+       func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+              return true
+          }
 }

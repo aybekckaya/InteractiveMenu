@@ -12,6 +12,12 @@ import UIKit
 //MARK: Interactive Menu DataSource
 protocol InteractiveMenuDataSource {
     func interactiveMenuViewInContainerView(interactiveMenu: InteractiveMenu)->UIView
+    func interactiveMenuViewScrollableContentView(interactiveMenu : InteractiveMenu)->UIScrollView?
+}
+
+protocol InteractiveMenuDelegate {
+    // What should be in HERE
+    
 }
 
 // MARK: Interactive Menu Configuration
@@ -27,13 +33,14 @@ class InteractiveMenuConfiguration {
 // MARK: Interactive Menu {Class}
 class InteractiveMenu: UIView {
      fileprivate let containerViewBottomMarginRate:CGFloat = 0.5 // Addition to bottom of view
+    fileprivate let dampingValue:CGFloat = 0.7
+    fileprivate let responseValue:CGFloat = 0.5
     
     fileprivate let viewBlurBackground:UIVisualEffectView = {
         let blurEffect = UIBlurEffect(style: UIBlurEffect.Style.dark)
         let blurView = UIVisualEffectView(effect: blurEffect)
         blurView.translatesAutoresizingMaskIntoConstraints = true
         blurView.alpha = 0.8
-        //blurView.backgroundColor = UIColor.blue
         return blurView
     }()
     
@@ -48,19 +55,26 @@ class InteractiveMenu: UIView {
     
     fileprivate var configuration:InteractiveMenuConfiguration = InteractiveMenuConfiguration()
     fileprivate var dataSource:InteractiveMenuDataSource!
+    fileprivate var delegate:InteractiveMenuDelegate?
     fileprivate var frameClosedPosition:CGRect = CGRect.zero
     fileprivate var frameOpenPosition:CGRect = CGRect.zero
     fileprivate var animator:UIViewPropertyAnimator = UIViewPropertyAnimator()
+    fileprivate var viewInContainer:UIView!
+    fileprivate var scrollableContentView:UIScrollView?
+    fileprivate var panGestureContainerView:InstantPanGesture!
+    fileprivate var panGestureScrollableContent:UIPanGestureRecognizer?
+
     
     fileprivate var totalHeightContainerView:CGFloat {
         return self.configuration.containerViewHeight + self.configuration.containerViewHeight * self.containerViewBottomMarginRate
     }
    
     
-    init(embedIn view:UIView , dataSource : InteractiveMenuDataSource , configuration:InteractiveMenuConfiguration) {
+    init(embedIn view:UIView , dataSource : InteractiveMenuDataSource , delegate:InteractiveMenuDelegate? , configuration:InteractiveMenuConfiguration) {
         super.init(frame: CGRect.zero)
         self.dataSource = dataSource
         self.configuration = configuration
+        self.delegate = delegate
         view.addSubview(self)
         self.setUpUI()
     }
@@ -82,24 +96,67 @@ extension InteractiveMenu {
         self.addSubview(self.containerView)
         self.containerView.frame = CGRect(x: 0, y: self.frame.size.height - self.configuration.containerViewHeight, width: self.frame.size.width , height: self.totalHeightContainerView)
         
-        let viewInContainer = self.dataSource.interactiveMenuViewInContainerView(interactiveMenu: self)
+        self.viewInContainer = self.dataSource.interactiveMenuViewInContainerView(interactiveMenu: self)
         viewInContainer.frame = CGRect(x: 0, y: 0, width: self.containerView.frame.size.width , height: self.configuration.containerViewHeight)
         self.containerView.addSubview(viewInContainer)
         viewInContainer.layoutIfNeeded()
         
+        if let scrollableContent = self.dataSource.interactiveMenuViewScrollableContentView(interactiveMenu: self) {
+            scrollableContent.addObserver(self, forKeyPath: "contentOffset", options: [.new , .old], context: nil)
+            self.panGestureScrollableContent = scrollableContent.gestureRecognizers?.first(where: { rec -> Bool in
+                if let _:UIPanGestureRecognizer = rec as? UIPanGestureRecognizer {
+                    return true
+                }
+                return false
+            }) as? UIPanGestureRecognizer
+            self.scrollableContentView = scrollableContent
+            
+        }
+       
         self.frameOpenPosition = CGRect(x: 0, y: self.frame.size.height - self.configuration.containerViewHeight, width: self.frame.size.width , height: self.totalHeightContainerView)
-        self.frameClosedPosition = CGRect(x: 0, y: self.frame.size.height, width: self.frame.size.width , height: self.totalHeightContainerView)
+        self.frameClosedPosition = CGRect(x: 0, y: self.frame.size.height + 50, width: self.frame.size.width , height: self.totalHeightContainerView)
         self.containerView.frame = self.frameClosedPosition
         self.frame = CGRect(x: 0, y: self.frame.size.height, width: self.frame.size.width, height: self.frame.size.height)
      
         let tapGestureBlurView = UITapGestureRecognizer(target: self, action: #selector(blurViewDidTapped))
         self.viewBlurBackground.addGestureRecognizer(tapGestureBlurView)
         
-        let panGestureContainerView = UIPanGestureRecognizer(target: self, action: #selector(containerViewPanned(recognizer:)))
-        self.containerView.addGestureRecognizer(panGestureContainerView)
+        self.panGestureContainerView = InstantPanGesture(target: self, action: #selector(containerViewPanned(recognizer:)))
+        self.panGestureContainerView.name = "PanContent"
+        self.panGestureContainerView.setCanDetected(enabled: true)
+        self.containerView.addGestureRecognizer(self.panGestureContainerView)
+        if self.scrollableContentView != nil {
+            self.panGestureContainerView.setCanDetected(enabled: false)
+        }
+        
+        panGestureContainerView.delegate = self
+       self.containerView.backgroundColor = self.configuration.containerViewBackgroundColor
         
     }
     
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        if let key = keyPath , key == "contentOffset" , let scroll = object as? UIScrollView  {
+            if scroll.contentOffset.y <= 0 {
+                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: 0), animated: false )
+            }
+            
+        }
+    }
+    
+}
+
+// MARK: Gesture Delegate
+extension InteractiveMenu : UIGestureRecognizerDelegate{
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        if let _ = self.panGestureScrollableContent {
+            if self.scrollableContentView!.contentOffset.y <= 0 {
+                return true
+            }
+            
+            return false
+        }
+        return true
+    }
 }
 
 
@@ -109,7 +166,10 @@ extension InteractiveMenu {
         self.hideView()
     }
     
+   
+    
     @objc fileprivate func containerViewPanned(recognizer: UIPanGestureRecognizer) {
+       
         switch recognizer.state {
         
         case .began:
@@ -117,87 +177,84 @@ extension InteractiveMenu {
         
         case .changed:
             let currentTranslation = recognizer.translation(in: recognizer.view!)
-            let yPosNext =  recognizer.view!.center.y + currentTranslation.y
-            let openedCenterYPos:CGFloat = self.frameOpenPosition.origin.y + self.frameOpenPosition.size.height / 2
-            let closedCenterYPos:CGFloat = self.frameClosedPosition.origin.y + self.frameClosedPosition.size.height / 2
-            let openPosDistance:CGFloat = recognizer.view!.frame.origin.y - self.frameOpenPosition.origin.y
-            let maxDistance:CGFloat = self.frameClosedPosition.origin.y - self.frameOpenPosition.origin.y
-            let rateOpened:CGFloat = openPosDistance / maxDistance
-            let blurViewAlpha:CGFloat = min(0.7, 1-rateOpened)
-            self.viewBlurBackground.alpha = blurViewAlpha
-            if yPosNext < openedCenterYPos {
-                let translationY = recognizer.translation(in: recognizer.view!).y * 0.05
-                recognizer.view!.center = CGPoint(x: recognizer.view!.center.x, y: recognizer.view!.center.y + translationY)
-            }
-            else if yPosNext > closedCenterYPos {
-                let translationY = recognizer.translation(in: recognizer.view!).y * 0.05
-                recognizer.view!.center = CGPoint(x: recognizer.view!.center.x, y: recognizer.view!.center.y + translationY)
-            }
-            else {
-                recognizer.view!.center = CGPoint(x: recognizer.view!.center.x, y: yPosNext)
-            }
-            
+            self.setContainerViewCenter(currentTranslation: currentTranslation)
+            self.setBlurViewAlpha()
             recognizer.setTranslation(CGPoint.zero, in: recognizer.view!)
             
             
         case .ended , .cancelled:
-            let openedCenterYPos:CGFloat = self.frameOpenPosition.origin.y + self.frameOpenPosition.size.height / 2
-            let closedCenterYPos:CGFloat = self.frameClosedPosition.origin.y + self.frameClosedPosition.size.height / 2
             let velocity = recognizer.velocity(in: recognizer.view!).y
             let distance = self.distanceForVelocity(velocity: velocity)
             var prefferedVelocity = velocity / distance
-            if prefferedVelocity < 0 {
-                prefferedVelocity = max(-30 , prefferedVelocity)
+            if prefferedVelocity < 0 { prefferedVelocity = max(-30 , prefferedVelocity) }
+            let diffOpenYPos:CGFloat = abs(recognizer.view!.frame.origin.y - self.frameOpenPosition.origin.y)
+            let diffCloseYPos:CGFloat = abs(recognizer.view!.frame.origin.y - self.frameClosedPosition.origin.y)
+           
+            let velocityTreshold:CGFloat = 0.5
+            if abs(prefferedVelocity) <= velocityTreshold && diffOpenYPos <= diffCloseYPos {
+                self.showView()
             }
-            print("Pref Velocity : \(prefferedVelocity) , Velocity : \(velocity)")
-            if abs(prefferedVelocity) <= 1.5 {
-                let diffOpenYPos:CGFloat = abs(recognizer.view!.frame.origin.y - self.frameOpenPosition.origin.y)
-                let diffCloseYPos:CGFloat = abs(recognizer.view!.frame.origin.y - self.frameClosedPosition.origin.y)
-                if diffOpenYPos <= diffCloseYPos {
-                    self.showView()
-                }
-                else {
-                    self.hideView()
-                }
+            else if abs(prefferedVelocity) <= velocityTreshold && diffOpenYPos > diffCloseYPos {
+                self.hideView()
+            }
+            else if abs(prefferedVelocity) > velocityTreshold && prefferedVelocity < 0 {
+                let velocityValue = velocity * 0.01
+                self.showView(initialVelocity: velocityValue)
+            }
+            else if abs(prefferedVelocity) > velocityTreshold && prefferedVelocity >= 0 {
+                let velocityValue = velocity * 0.01
+                self.hideView(initialVelocity: velocityValue)
             }
             else {
-                let newCenterYPos = prefferedVelocity < 0 ? openedCenterYPos  : closedCenterYPos
-                let vectorVelocity = abs(prefferedVelocity * 1)
-                let timingParameters =  UISpringTimingParameters(damping: 1.5, response: 0.5, initialVelocity: CGVector(dx: vectorVelocity , dy: vectorVelocity))
-                self.animator = UIViewPropertyAnimator(duration: 0, timingParameters: timingParameters)
-                self.animator.addAnimations {
-                    recognizer.view!.center = CGPoint(x: recognizer.view!.center.x, y: newCenterYPos)
-                    if velocity >= 0 { self.viewBlurBackground.alpha = 0 }
-                    else { self.viewBlurBackground.alpha = 0.7 }
-                }
-                self.animator.addCompletion { pos in
-                    guard pos == .end else { return }
-                    if velocity >= 0 {  self.hideView() }
-                    else { self.showView() }
-                    
-                }
+                self.showView()
             }
-           
-            self.animator.startAnimation()
+
         default: break
         }
     }
     
     
     
-    fileprivate func distanceForVelocity(velocity:CGFloat)->CGFloat {
+    private func applyRubberBandingIfNeeded(currentTranslation: CGPoint)->Bool {
+           let yPosNext =  self.containerView.center.y + currentTranslation.y
+           let openedCenterYPos:CGFloat = self.frameOpenPosition.origin.y + self.frameOpenPosition.size.height / 2
+           let closedCenterYPos:CGFloat = self.frameClosedPosition.origin.y + self.frameClosedPosition.size.height / 2
+           guard yPosNext < openedCenterYPos || yPosNext > closedCenterYPos else { return false }
+           let translationY = currentTranslation.y * 0.05
+           self.containerView.center = CGPoint(x: self.containerView.center.x, y: self.containerView.center.y + translationY)
+           return true
+       }
+       
+       
+       private func setContainerViewCenter(currentTranslation: CGPoint) {
+           guard self.applyRubberBandingIfNeeded(currentTranslation: currentTranslation) else {
+               self.containerView.center = CGPoint(x: self.containerView.center.x, y: self.containerView.center.y + currentTranslation.y)
+               return
+           }
+       }
+       
+       private func setBlurViewAlpha() {
+           let openPosDistance:CGFloat = self.containerView.frame.origin.y - self.frameOpenPosition.origin.y
+           let maxDistance:CGFloat = self.frameClosedPosition.origin.y - self.frameOpenPosition.origin.y
+           let rateOpened:CGFloat = openPosDistance / maxDistance
+           let blurViewAlpha:CGFloat = min(0.7, 1-rateOpened)
+           self.viewBlurBackground.alpha = blurViewAlpha
+       }
+    
+     private func distanceForVelocity(velocity:CGFloat)->CGFloat {
         let openedCenterYPos:CGFloat = self.frameOpenPosition.origin.y + self.frameOpenPosition.size.height / 2
         let closedCenterYPos:CGFloat = self.frameClosedPosition.origin.y + self.frameClosedPosition.size.height / 2
         if velocity < 0 { return abs(openedCenterYPos - self.containerView.center.y) }
         return abs(closedCenterYPos - self.containerView.center.y)
     }
     
-    fileprivate func showView() {
+    fileprivate func showView(initialVelocity: CGFloat = 0 ) {
          if self.animator.isRunning { self.animator.stopAnimation(true) }
         self.frame = CGRect(x: self.frame.origin.x, y: 0, width: self.frame.size.width, height: self.frame.size.height)
         self.viewBlurBackground.alpha = 0.7
-        let timingParameters =  UISpringTimingParameters(damping: 0.6, response: 0.5)
-        self.animator = UIViewPropertyAnimator(duration: 0, timingParameters: timingParameters)
+        print("Velocity : \(initialVelocity)")
+        let timingParameters =  UISpringTimingParameters(damping: self.dampingValue, response: self.responseValue , initialVelocity: CGVector(dx: initialVelocity, dy: initialVelocity))
+        self.animator = UIViewPropertyAnimator(duration: 0, timingParameters: timingParameters )
         self.animator.addAnimations {
             self.containerView.frame = self.frameOpenPosition
         }
@@ -209,11 +266,11 @@ extension InteractiveMenu {
         self.animator.startAnimation()
     }
     
-    fileprivate func hideView() {
+    fileprivate func hideView(initialVelocity: CGFloat = 0) {
         if self.animator.isRunning { self.animator.stopAnimation(true) }
-         
-        let timingParameters =  UISpringTimingParameters(damping: 1.5, response: 0.5)
-        self.animator = UIViewPropertyAnimator(duration: 0, timingParameters: timingParameters)
+        
+        let timingParameters =  UISpringTimingParameters(damping: self.dampingValue, response: self.responseValue , initialVelocity: CGVector(dx: initialVelocity, dy: initialVelocity))
+        self.animator = UIViewPropertyAnimator(duration: 0, timingParameters: timingParameters )
         self.animator.addAnimations {
             self.containerView.frame = self.frameClosedPosition
             self.viewBlurBackground.alpha = 0
@@ -255,10 +312,16 @@ fileprivate extension UISpringTimingParameters {
 
 //MARK: InstantPanGesture
 class InstantPanGesture : UIPanGestureRecognizer {
+    fileprivate var canDetected:Bool = true
     
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
+        guard self.canDetected else { return }
         self.state = .began
+    }
+    
+    func setCanDetected(enabled:Bool) {
+        self.canDetected = enabled
     }
  
 }
